@@ -1,0 +1,63 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(userId)
+                    && request.resource.data.uid == userId
+                    && request.resource.data.keys().hasAll(['uid', 'displayName', 'email', 'createdAt']);
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    match /friendRequests/{requestId} {
+      // User can create a request if they are the sender
+      allow create: if isOwner(request.resource.data.fromUid);
+
+      // Only the sender or receiver can read the request.
+      allow read: if isSignedIn() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+      
+      // Only the receiver can update the request (to accept/decline it).
+      allow update: if isOwner(resource.data.toUid);
+      
+      // Either user can delete it.
+      allow delete: if isSignedIn() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+    }
+    
+    match /privateChats/{chatId}/messages/{messageId} {
+      // Only the two people in the chat can read or write messages
+      allow read, write: if isSignedIn() && request.auth.uid in chatId.split('_');
+    }
+    
+    match /groupChats/{chatId} {
+        // Members of the group can read or update group info
+        allow read, update: if isSignedIn() && request.auth.uid in resource.data.members;
+        
+        // A user can create a group if they are in the members list
+        allow create: if isSignedIn() && request.auth.uid in request.resource.data.members;
+
+        // Allow any authenticated user to list groups to enable search functionality
+        allow list: if isSignedIn();
+
+      match /messages/{messageId} {
+        // A member of the group can write a message
+        allow write: if isSignedIn() 
+          && request.auth.uid in get(/databases/$(database)/documents/groupChats/$(chatId)).data.members
+          && request.resource.data.uid == request.auth.uid;
+          
+        // A member of the group can read messages
+        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/groupChats/$(chatId)).data.members;
+      }
+    }
+  }
+}
